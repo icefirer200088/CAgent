@@ -1,0 +1,15 @@
+{
+  "tools": [
+    {
+      "name": "encode_base64",
+      "description": "将文本编码为 Base64",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": {"type": "string", "description": "要编码的文本"}
+        },
+        "required": ["text"]
+      }
+    }
+  ]
+}
