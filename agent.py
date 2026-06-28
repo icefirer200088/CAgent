@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """
-CAgent v3 — 动态 System Prompt
+CAgent v4 — Shell 安全执行
 ================================
-对照 Claude Code Ch03: Prompt 工程
-- SystemPrompt 模块化组装
-- 角色定义 / 工具说明 / 输出约束 分模块
-- 根据已有工具动态生成工具使用说明
-- 保持 v2 的 ToolBase + ToolRegistry 不变
+对照 Claude Code Ch04: Shell 安全
+- run_shell 工具：沙箱执行 Shell 命令
+- 命令黑名单：禁止 rm -rf / 等危险操作
+- 超时保护：防止死循环
+- 输出截断：防止刷爆上下文
+- 路径校验：限制执行目录
 """
 
 import json
 import os
 import sys
 import inspect
+import subprocess
+import time
+import shlex
 from pathlib import Path
 from openai import OpenAI
 
@@ -38,18 +42,11 @@ MAX_TURNS = 10
 # ═══════════════════════════════════════════════
 
 class PromptModule:
-    """
-    Prompt 模块基类。
-    每个模块返回一段文字，最终拼接成完整 System Prompt。
-    """
-
     def render(self) -> str:
         raise NotImplementedError
 
 
 class RoleModule(PromptModule):
-    """角色定义"""
-
     def render(self) -> str:
         return """你是 CAgent，一个多功能 AI 助手。
 你有权使用各种工具来帮助用户解决问题。
@@ -57,24 +54,18 @@ class RoleModule(PromptModule):
 
 
 class ToolGuideModule(PromptModule):
-    """工具使用指南——根据当前注册的工具动态生成"""
-
     def render(self) -> str:
         if not ToolRegistry.list_tools():
             return ""
-
         lines = ["## 可用工具"]
         for tool in ToolRegistry._tools.values():
             lines.append(f"- `{tool.name}`: {tool.description}")
         lines.append("")
         lines.append("当你需要完成某个任务时，从以上工具中选择合适的工具调用。")
-        lines.append("如果一次需要多个操作，可以依次调用多个工具。")
         return "\n".join(lines)
 
 
 class OutputFormatModule(PromptModule):
-    """输出格式约束"""
-
     def render(self) -> str:
         return """## 回答要求
 - 简洁、准确
@@ -83,8 +74,6 @@ class OutputFormatModule(PromptModule):
 
 
 class SafetyModule(PromptModule):
-    """安全约束"""
-
     def render(self) -> str:
         return """## 安全限制
 - 不要执行任何危害系统安全的操作
@@ -93,8 +82,6 @@ class SafetyModule(PromptModule):
 
 
 class SystemPrompt:
-    """组装完整的 System Prompt from 多个模块"""
-
     modules: list[PromptModule] = []
 
     def __init__(self):
@@ -110,12 +97,117 @@ class SystemPrompt:
 
     def render(self) -> str:
         parts = [m.render() for m in self.modules]
-        parts = [p for p in parts if p]  # 去掉空模块
+        parts = [p for p in parts if p]
         return "\n\n".join(parts)
 
 
 # ═══════════════════════════════════════════════
-# Ch02: 工具系统（保持不变，多一行 for enum）
+# Ch04: Shell 安全执行
+# ═══════════════════════════════════════════════
+
+# 命令黑名单 — 包含任意一个词就拒绝执行
+BLOCKED_KEYWORDS = [
+    "rm -rf /", "rm -rf /*",
+    "mkfs", "dd if=", "format ",
+    ":(){ :|:& };:",  # fork bomb
+    "> /dev/sda", "> /dev/nvme",
+    "chmod 777 /", "chmod -R 777 /",
+    "wget ", "curl ",    # 禁止下载未知内容
+    "nc ", "ncat ",       # 禁止反弹 shell
+    "sudo ",              # 禁止提权
+]
+
+# 允许执行的目录白名单（安全基线，子目录自动允许）
+ALLOWED_DIRS = [
+    Path("/root/CAgent"),
+    Path("/root"),
+    Path("/tmp"),
+]
+
+SHELL_TIMEOUT = 15       # 单条命令最多 15 秒
+MAX_OUTPUT_CHARS = 2000  # 输出最多截断到 2000 字符
+
+
+def validate_command(command: str) -> tuple[bool, str]:
+    """
+    安全检查：
+    1. 命令黑名单
+    2. 危险模式检测
+    """
+    cmd_lower = command.lower().strip()
+
+    # 黑名单匹配
+    for keyword in BLOCKED_KEYWORDS:
+        if keyword in cmd_lower:
+            return False, f"危险命令被拒绝: 包含禁止的关键词 '{keyword}'"
+
+    # 空命令
+    if not command.strip():
+        return False, "命令不能为空"
+
+    # 检查是否有 && 或 ; 链接的危险命令
+    # (简化版：仅检查最明显的风险)
+    for sep in ["&&", "||", ";"]:
+        parts = command.split(sep)
+        if len(parts) > 1:
+            for part in parts:
+                ok, msg = validate_command(part.strip())
+                if not ok:
+                    return False, f"多段命令中发现危险操作: {msg}"
+
+    return True, ""
+
+
+def run_shell_impl(command: str, workdir: str = ".") -> str:
+    """
+    在安全沙箱中执行命令。
+    command: 要执行的 Shell 命令
+    workdir: 执行目录（默认当前目录）
+    """
+    # 1. 安全检查
+    ok, reason = validate_command(command)
+    if not ok:
+        return f"[安全拒绝] {reason}"
+
+    # 2. 路径校验
+    exec_dir = Path(workdir).resolve()
+    allowed = False
+    for allowed_dir in ALLOWED_DIRS:
+        try:
+            exec_dir.relative_to(allowed_dir)
+            allowed = True
+            break
+        except ValueError:
+            continue
+    if not allowed:
+        return f"[安全拒绝] 禁止在 {exec_dir} 目录执行命令（允许: {[str(d) for d in ALLOWED_DIRS]}）"
+
+    # 3. 执行（带超时和输出截断）
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            cwd=exec_dir,
+            capture_output=True,
+            text=True,
+            timeout=SHELL_TIMEOUT,
+        )
+
+        output = result.stdout + result.stderr
+        if len(output) > MAX_OUTPUT_CHARS:
+            output = output[:MAX_OUTPUT_CHARS] + f"\n...（输出截断，共 {len(output)} 字符）"
+
+        exit_code = result.returncode
+        return f"exit code: {exit_code}\n{output}"
+
+    except subprocess.TimeoutExpired:
+        return f"[超时] 命令执行超过 {SHELL_TIMEOUT} 秒，已终止"
+    except Exception as e:
+        return f"[执行错误] {e}"
+
+
+# ═══════════════════════════════════════════════
+# Ch02: 工具系统
 # ═══════════════════════════════════════════════
 
 class ToolRegistry:
@@ -156,7 +248,6 @@ class ToolBase:
 
         properties = {}
         required = []
-        enums = {}  # Ch03 改进: 支持 enum 推断
 
         for p_name, p_param in sig.parameters.items():
             if p_name == "self":
@@ -242,14 +333,24 @@ class GetWeather(ToolBase):
         return mock.get(city, f"{city}: 暂时查不到天气数据")
 
 
+class RunShell(ToolBase):
+    name = "run_shell"
+    description = "在安全环境中执行 Shell 命令（有安全过滤、超时保护和输出截断）"
+
+    def run(self, command: str, workdir: str = ".") -> str:
+        """
+        command: 要执行的 Shell 命令
+        workdir: 执行目录，默认当前目录
+        """
+        return run_shell_impl(command, workdir)
+
+
 # ═══════════════════════════════════════════════
-# Agent 循环（v3 改进：注入 System Prompt）
+# Agent 循环
 # ═══════════════════════════════════════════════
 
 def agent_loop(user_input: str) -> str:
-    # v3: 动态生成 System Prompt
     system_prompt = SystemPrompt().render()
-    print(f"📋 System Prompt:\n{system_prompt}\n")
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -258,7 +359,6 @@ def agent_loop(user_input: str) -> str:
     tools = ToolRegistry.get_openai_tools()
 
     print(f"📦 已注册工具: {ToolRegistry.list_tools()}")
-    print(f"📋 工具 schema: {json.dumps(tools, indent=2, ensure_ascii=False)}")
 
     for turn in range(1, MAX_TURNS + 1):
         print(f"\n── 第 {turn} 轮 ──")
@@ -282,7 +382,7 @@ def agent_loop(user_input: str) -> str:
 
             print(f"  → 调用工具: {func_name}({args})")
             result = ToolRegistry.execute(func_name, **args)
-            print(f"  ← 结果: {result}")
+            print(f"  ← 结果: {result[:200]}...")
 
             messages.append({
                 "role": "tool",
@@ -296,7 +396,7 @@ def agent_loop(user_input: str) -> str:
 
 # ─── 入口 ─────────────────────────────────────
 if __name__ == "__main__":
-    prompt = sys.argv[1] if len(sys.argv) > 1 else "今天深圳多少度？顺便帮我算 3.14 * 2.71"
+    prompt = sys.argv[1] if len(sys.argv) > 1 else "帮我看看当前目录有什么文件？再算一下 256 * 8"
     print(f"🧑 用户: {prompt}")
     result = agent_loop(prompt)
     print(f"\n✅ 最终回答: {result}")

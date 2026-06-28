@@ -9,7 +9,7 @@
 | 核心循环 | Ch01 Agent 循环 | `v1` — 最简 loop + 2个工具 + maxTurns | ✅ |
 | 工具系统 | Ch02 工具系统 | `v2` — ToolBase 基类、自动 schema 生成、注册式架构 | ✅ |
 | 提示词工程 | Ch03 Prompt 工程 | `v3` — SystemPrompt 模块化组装、动态注入 | ✅ |
-| Shell 安全 | Ch04 Shell 安全 | 沙箱执行、路径校验 | ⏳ |
+| Shell 安全 | Ch04 Shell 安全 | `v4` — run_shell 沙箱、黑名单、超时、截断 | ✅ |
 | 权限引擎 | Ch05 权限引擎 | allow/deny/ask 规则 | ⏳ |
 | 上下文管理 | Ch06 上下文管理 | Token 预算、压缩策略 | ⏳ |
 | MCP 协议 | Ch07 MCP 协议 | 外部工具发现 | ⏳ |
