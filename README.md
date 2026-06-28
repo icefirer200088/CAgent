@@ -13,7 +13,7 @@
 | 权限引擎 | Ch05 权限引擎 | `v5` — PermissionEngine allow/deny/ask + 规则持久化 | ✅ |
 | 上下文管理 | Ch06 上下文管理 | `v6` — ContextManager token 预算、智能压缩 | ✅ |
 | MCP 协议 | Ch07 MCP 协议 | `v7` — MCPClient 外部工具发现、动态加载 | ✅ |
-| 插件生态 | Ch08 插件生态 | 动态加载 | ⏳ |
+| 插件生态 | Ch08 插件生态 | `v8` — PluginBase/PluginManager + 3 内置插件 | ✅ |
 | 多 Agent | Ch09 多 Agent | 子 Agent/Team/Swarm | ⏳ |
 | CLI 传输层 | Ch10 CLI 传输 | 多种运行模式 | ⏳ |
 
