@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-CAgent v2 — 工具注册式架构
-=============================
-对照 Claude Code Ch02: 工具系统
-- ToolBase 基类 + 自动 schema 生成
-- ToolRegistry 自动收集/调用
-- 保持 v1 的 Agent 循环不变
+CAgent v3 — 动态 System Prompt
+================================
+对照 Claude Code Ch03: Prompt 工程
+- SystemPrompt 模块化组装
+- 角色定义 / 工具说明 / 输出约束 分模块
+- 根据已有工具动态生成工具使用说明
+- 保持 v2 的 ToolBase + ToolRegistry 不变
 """
 
 import json
@@ -33,12 +34,91 @@ MAX_TURNS = 10
 
 
 # ═══════════════════════════════════════════════
-# Ch02: 工具系统
+# Ch03: System Prompt 工程
+# ═══════════════════════════════════════════════
+
+class PromptModule:
+    """
+    Prompt 模块基类。
+    每个模块返回一段文字，最终拼接成完整 System Prompt。
+    """
+
+    def render(self) -> str:
+        raise NotImplementedError
+
+
+class RoleModule(PromptModule):
+    """角色定义"""
+
+    def render(self) -> str:
+        return """你是 CAgent，一个多功能 AI 助手。
+你有权使用各种工具来帮助用户解决问题。
+在每一步中，你应该分析用户的需求，合理选择工具来完成任务。"""
+
+
+class ToolGuideModule(PromptModule):
+    """工具使用指南——根据当前注册的工具动态生成"""
+
+    def render(self) -> str:
+        if not ToolRegistry.list_tools():
+            return ""
+
+        lines = ["## 可用工具"]
+        for tool in ToolRegistry._tools.values():
+            lines.append(f"- `{tool.name}`: {tool.description}")
+        lines.append("")
+        lines.append("当你需要完成某个任务时，从以上工具中选择合适的工具调用。")
+        lines.append("如果一次需要多个操作，可以依次调用多个工具。")
+        return "\n".join(lines)
+
+
+class OutputFormatModule(PromptModule):
+    """输出格式约束"""
+
+    def render(self) -> str:
+        return """## 回答要求
+- 简洁、准确
+- 涉及数据时给出具体数值
+- 完成所有工具调用后，给出最终总结"""
+
+
+class SafetyModule(PromptModule):
+    """安全约束"""
+
+    def render(self) -> str:
+        return """## 安全限制
+- 不要执行任何危害系统安全的操作
+- 不要尝试读取敏感文件
+- 严格按照工具的参数格式进行调用"""
+
+
+class SystemPrompt:
+    """组装完整的 System Prompt from 多个模块"""
+
+    modules: list[PromptModule] = []
+
+    def __init__(self):
+        self.modules = [
+            RoleModule(),
+            ToolGuideModule(),
+            OutputFormatModule(),
+            SafetyModule(),
+        ]
+
+    def add_module(self, module: PromptModule):
+        self.modules.append(module)
+
+    def render(self) -> str:
+        parts = [m.render() for m in self.modules]
+        parts = [p for p in parts if p]  # 去掉空模块
+        return "\n\n".join(parts)
+
+
+# ═══════════════════════════════════════════════
+# Ch02: 工具系统（保持不变，多一行 for enum）
 # ═══════════════════════════════════════════════
 
 class ToolRegistry:
-    """全局工具注册表——自动收集所有 Tool 子类"""
-
     _tools: dict[str, "ToolBase"] = {}
 
     @classmethod
@@ -47,7 +127,6 @@ class ToolRegistry:
 
     @classmethod
     def get_openai_tools(cls) -> list[dict]:
-        """生成 OpenAI 所需的 tools 参数列表"""
         return [t.openai_schema() for t in cls._tools.values()]
 
     @classmethod
@@ -63,40 +142,27 @@ class ToolRegistry:
 
 
 class ToolBase:
-    """
-    工具基类。
-    子类只需定义:
-      name        — 工具名
-      description — 描述 (LLM 靠这个匹配)
-      run()       — 实际执行逻辑
-    
-    openai_schema() 和注册逻辑自动完成。
-    """
-
     name: str = ""
     description: str = ""
 
     def __init_subclass__(cls, **kwargs):
-        """自动注册所有非抽象子类"""
         super().__init_subclass__(**kwargs)
-        # 跳过 ToolBase 本身（如果用 ABC 则更优雅，但为了简洁用 name 判断）
         if cls.name:
             ToolRegistry.register(cls())
 
     def openai_schema(self) -> dict:
-        """从 run() 的签名和文档自动生成 OpenAI tool schema"""
         sig = inspect.signature(self.run)
         doc = inspect.getdoc(self.run) or ""
 
         properties = {}
         required = []
+        enums = {}  # Ch03 改进: 支持 enum 推断
 
         for p_name, p_param in sig.parameters.items():
             if p_name == "self":
                 continue
             required.append(p_name)
 
-            # 类型: 支持 int, float, str, bool
             type_map = {
                 int: "number",
                 float: "number",
@@ -105,7 +171,6 @@ class ToolBase:
             }
             json_type = type_map.get(p_param.annotation, "string")
 
-            # 从文档提取参数说明（"a: 第一个数" 格式）
             param_desc = ""
             for line in doc.split("\n"):
                 line = line.strip()
@@ -130,7 +195,6 @@ class ToolBase:
         }
 
     def run(self, **kwargs) -> str:
-        """子类实现——实际执行逻辑"""
         raise NotImplementedError
 
     def __call__(self, **kwargs) -> str:
@@ -149,7 +213,7 @@ class Calculator(ToolBase):
         """
         a: 第一个数
         b: 第二个数
-        op: 运算
+        op: 运算，可选值: add, subtract, multiply, divide
         """
         ops = {
             "add": lambda: a + b,
@@ -179,15 +243,22 @@ class GetWeather(ToolBase):
 
 
 # ═══════════════════════════════════════════════
-# Agent 循环（与 v1 相同，只是调注册表）
+# Agent 循环（v3 改进：注入 System Prompt）
 # ═══════════════════════════════════════════════
 
 def agent_loop(user_input: str) -> str:
-    messages = [{"role": "user", "content": user_input}]
+    # v3: 动态生成 System Prompt
+    system_prompt = SystemPrompt().render()
+    print(f"📋 System Prompt:\n{system_prompt}\n")
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_input},
+    ]
     tools = ToolRegistry.get_openai_tools()
 
     print(f"📦 已注册工具: {ToolRegistry.list_tools()}")
-    print(f"📋 生成 schema: {json.dumps(tools, indent=2, ensure_ascii=False)}")
+    print(f"📋 工具 schema: {json.dumps(tools, indent=2, ensure_ascii=False)}")
 
     for turn in range(1, MAX_TURNS + 1):
         print(f"\n── 第 {turn} 轮 ──")
