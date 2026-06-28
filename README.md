@@ -11,7 +11,7 @@
 | 提示词工程 | Ch03 Prompt 工程 | `v3` — SystemPrompt 模块化组装、动态注入 | ✅ |
 | Shell 安全 | Ch04 Shell 安全 | `v4` — run_shell 沙箱、黑名单、超时、截断 | ✅ |
 | 权限引擎 | Ch05 权限引擎 | `v5` — PermissionEngine allow/deny/ask + 规则持久化 | ✅ |
-| 上下文管理 | Ch06 上下文管理 | Token 预算、压缩策略 | ⏳ |
+| 上下文管理 | Ch06 上下文管理 | `v6` — ContextManager token 预算、智能压缩 | ✅ |
 | MCP 协议 | Ch07 MCP 协议 | 外部工具发现 | ⏳ |
 | 插件生态 | Ch08 插件生态 | 动态加载 | ⏳ |
 | 多 Agent | Ch09 多 Agent | 子 Agent/Team/Swarm | ⏳ |
