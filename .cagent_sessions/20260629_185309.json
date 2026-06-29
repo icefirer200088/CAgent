@@ -1,0 +1,55 @@
+{
+  "id": "20260629_185309",
+  "time": "2026-06-29T18:53:09.600354",
+  "model": "deepseek-chat",
+  "input": "深圳今天天气",
+  "result": "深圳今天天气情况如下：\n\n🌤 **天气：** 多云\n🌡 **温度：** 26°C\n\n整体天气不错，温度适宜，适合外出活动。",
+  "trace": {
+    "spans": [
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782730385.1203883,
+        "end": 1782730388.092282,
+        "duration_ms": 2972,
+        "input_tokens": 1077,
+        "output_tokens": 52,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "get_weather",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "city": "深圳"
+        },
+        "result": "26°C,多云",
+        "status": "ok"
+      },
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782730388.0926528,
+        "end": 1782730389.6001835,
+        "duration_ms": 1508,
+        "input_tokens": 1145,
+        "output_tokens": 37,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      }
+    ],
+    "total_llm_calls": 2,
+    "total_tool_calls": 1,
+    "total_duration_ms": 4480
+  }
+}

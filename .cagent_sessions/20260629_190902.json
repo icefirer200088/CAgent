@@ -1,0 +1,141 @@
+{
+  "id": "20260629_190902",
+  "time": "2026-06-29T19:09:02.354843",
+  "model": "deepseek-chat",
+  "input": "帮我从webdav读一篇短的笔记，列出目录后找一篇短的",
+  "result": "找到了两篇笔记，我选第一篇（较短的配置笔记）读给你：\n\n---\n\n## 📝 笔记：`09-零碎/未命名.md`\n\n这是一篇关于 **OpenClaw 配置 DeepSeek API** 的简短配置笔记，内容如下：\n\n```\nopenclaw config set models.providers.deepseek '{\n  \"baseUrl\": \"https://api.deepseek.com/v1\",\n  \"apiKey\": \"sk-b4a9ea68c04143fd8e424f62e8af795d\",\n  \"api\": \"openai-completions\",\n  \"models\": [\n    {\n      \"id\": \"deepseek-chat\",\n      \"name\": \"DeepSeek Chat (V3)\"\n    },\n    {\n      \"id\": \"deepseek-reasoner\",\n      \"name\": \"DeepSeek Reasoner (R1)\"\n    }\n  ]\n}'\n```\n\n这篇笔记很短，就是一段 **OpenClaw 的配置",
+  "trace": {
+    "spans": [
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782731330.4381585,
+        "end": 1782731333.070593,
+        "duration_ms": 2632,
+        "input_tokens": 1370,
+        "output_tokens": 74,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "list_webdav",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 121,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "path": "onedrive/应用/remotely-save/obau/"
+        },
+        "result": "文件列表:\n  .obsidian/\n  .trash/\n  00-会议/\n  00-收集箱/\n  00-笔记/\n  01-学习/\n  01-待办/\n  02-文章/\n  03-书籍/\n  04-企业级agent/\n  05-幸福课/\n  08-linux操作/\n  09-零碎/\n  10-项目/\n  13-滑雪/\n  15-备忘/\n  16-尤开心/\n  20-领域/\n  30-资源/\n  88",
+        "status": "ok"
+      },
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782731333.1919758,
+        "end": 1782731335.4518375,
+        "duration_ms": 2260,
+        "input_tokens": 1596,
+        "output_tokens": 144,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "list_webdav",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 98,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "path": "onedrive/应用/remotely-save/obau/00-笔记/"
+        },
+        "result": "文件列表:\n  台州银行信息科技全文转录.txt\n  未命名/",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "list_webdav",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 75,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "path": "onedrive/应用/remotely-save/obau/09-零碎/"
+        },
+        "result": "文件列表:\n  台州银行.md\n  未命名 1.md\n  未命名.md",
+        "status": "ok"
+      },
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782731335.6246011,
+        "end": 1782731338.705743,
+        "duration_ms": 3081,
+        "input_tokens": 1797,
+        "output_tokens": 143,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "read_webdav",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 105,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "path": "onedrive/应用/remotely-save/obau/09-零碎/未命名.md"
+        },
+        "result": "```text\nopenclaw config set models.providers.deepseek '{\n  \"baseUrl\": \"https://api.deepseek.com/v1\",\n  \"apiKey\": \"sk-b4a9ea68c04143fd8e424f62e8af795d\",\n  \"api\": \"openai-completions\",\n  \"models\": [\n   ",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "read_webdav",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 140,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "path": "onedrive/应用/remotely-save/obau/09-零碎/未命名 1.md"
+        },
+        "result": "#!/usr/bin/env python3\n\n\"\"\"\n\nCAgent - 最简 Agent 核心循环  v1\n\n========================================\n\n对照 Claude Code 的 Ch01: Agent 循环\n\n  \n\n教学版 ~30 行, 加上基础的工程化 ~60 行\n\n\"\"\"\n\n  \n\nimport json\n\nimport os\n\nimpo",
+        "status": "ok"
+      },
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782731338.950608,
+        "end": 1782731342.3546255,
+        "duration_ms": 3404,
+        "input_tokens": 3369,
+        "output_tokens": 273,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      }
+    ],
+    "total_llm_calls": 4,
+    "total_tool_calls": 5,
+    "total_duration_ms": 11916
+  }
+}

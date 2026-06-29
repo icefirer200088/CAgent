@@ -1,0 +1,83 @@
+{
+  "id": "20260629_185238",
+  "time": "2026-06-29T18:52:38.288440",
+  "model": "deepseek-chat",
+  "input": "用 web_search 搜索一下深圳今天的天气",
+  "result": "深圳今天天气如下：\n\n- **天气状况**：☁️ 多云\n- **气温**：🌡️ 26°C\n\n天气不错，适合外出活动，不过多云天气建议出门带件薄外套备用。",
+  "trace": {
+    "spans": [
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782730351.3439527,
+        "end": 1782730353.7908475,
+        "duration_ms": 2447,
+        "input_tokens": 1077,
+        "output_tokens": 53,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "web_search",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 1161,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "query": "深圳今天天气"
+        },
+        "result": "(无直接结果)",
+        "status": "ok"
+      },
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782730354.9519484,
+        "end": 1782730356.4723365,
+        "duration_ms": 1520,
+        "input_tokens": 1144,
+        "output_tokens": 55,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "get_weather",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "city": "深圳"
+        },
+        "result": "26°C,多云",
+        "status": "ok"
+      },
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782730356.4726238,
+        "end": 1782730358.288379,
+        "duration_ms": 1816,
+        "input_tokens": 1216,
+        "output_tokens": 48,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      }
+    ],
+    "total_llm_calls": 3,
+    "total_tool_calls": 2,
+    "total_duration_ms": 6944
+  }
+}

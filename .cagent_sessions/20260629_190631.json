@@ -1,0 +1,55 @@
+{
+  "id": "20260629_190631",
+  "time": "2026-06-29T19:06:31.047782",
+  "model": "deepseek-chat",
+  "input": "列出我的webdav笔记目录",
+  "result": "以下是你的 WebDAV 笔记目录结构：\n\n### 📁 根目录：`onedrive/应用/remotely-save/obau/`\n\n| 目录 | 用途 |\n|------|------|\n| `.obsidian/` | Obsidian 配置 |\n| `.trash/` | 回收站 |\n| **00-会议/** | 会议记录 |\n| **00-收集箱/** | 收集箱（待整理） |\n| **00-笔记/** | 笔记 |\n| **01-学习/** | 学习资料 |\n| **01-待办/** | 待办事项 |\n| **02-文章/** | 文章 |\n| **03-书籍/** | 书籍笔记 |\n| **04-企业级agent/** | 企业级 Agent |\n| **05-幸福课/** | 幸福课 |\n| **08-linux操作/** | Linux 操作 |\n| **09-零碎/** | 零碎内容 |\n| **10-项目/** | 项目 |\n| **13-滑雪/** | 滑雪 |\n| **15-备忘/** | 备忘 |\n| **16-尤开心/** | 尤开心 |\n| **20-领域",
+  "trace": {
+    "spans": [
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782731184.7994297,
+        "end": 1782731187.4177387,
+        "duration_ms": 2618,
+        "input_tokens": 1361,
+        "output_tokens": 71,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "list_webdav",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 110,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "path": "onedrive/应用/remotely-save/obau/"
+        },
+        "result": "文件列表:\n  .obsidian/\n  .trash/\n  00-会议/\n  00-收集箱/\n  00-笔记/\n  01-学习/\n  01-待办/\n  02-文章/\n  03-书籍/\n  04-企业级agent/\n  05-幸福课/\n  08-linux操作/\n  09-零碎/\n  10-项目/\n  13-滑雪/\n  15-备忘/\n  16-尤开心/\n  20-领域/\n  30-资源/\n  88",
+        "status": "ok"
+      },
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782731187.5282683,
+        "end": 1782731191.0476034,
+        "duration_ms": 3519,
+        "input_tokens": 1584,
+        "output_tokens": 363,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      }
+    ],
+    "total_llm_calls": 2,
+    "total_tool_calls": 1,
+    "total_duration_ms": 6247
+  }
+}

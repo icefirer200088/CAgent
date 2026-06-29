@@ -395,27 +395,151 @@ PM = PluginManager()
 
 MCP_CONFIG_DIR = Path(__file__).parent / "mcp"
 
+class MCPClient:
+    """
+    MCP 客户端。
+    管理一个 MCP Server 子进程，通过 stdio JSON-RPC 通信。
+    每次调用工具时发送请求，等待返回。
+    """
+    def __init__(self, name: str, command: list):
+        self.name = name
+        self.command = command
+        self.process = None
+        self._tools = []
+
+    def connect(self):
+        """启动子进程并完成 initialize 握手"""
+        import subprocess
+        try:
+            self.process = subprocess.Popen(
+                self.command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            # 发送 initialize
+            resp = self._send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+            if resp and "result" in resp:
+                # 发送 initialized 通知
+                self._send_notify({"jsonrpc": "2.0", "method": "notifications/initialized"})
+                # 获取工具列表
+                import time; time.sleep(0.3)  # 等 Server 准备好
+                tools_resp = self._send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+                if tools_resp and "result" in tools_resp:
+                    self._tools = tools_resp["result"].get("tools", [])
+                    print(f"  🔌 MCP [{self.name}]: {len(self._tools)} 个工具")
+                    for t in self._tools:
+                        print(f"    └─ {t['name']}: {t.get('description','')[:60]}")
+                return True
+            return False
+        except Exception as e:
+            print(f"  ⚠ MCP [{self.name}] 连接失败: {e}")
+            return False
+
+    def _send(self, msg: dict) -> dict | None:
+        """发送请求并等待单行 JSON 响应"""
+        import json
+        if not self.process or not self.process.stdin:
+            return None
+        try:
+            line = json.dumps(msg, ensure_ascii=False) + "\n"
+            self.process.stdin.write(line)
+            self.process.stdin.flush()
+            while True:
+                resp_line = self.process.stdout.readline()
+                if not resp_line:
+                    return None
+                resp_line = resp_line.strip()
+                if resp_line.startswith("{"):
+                    return json.loads(resp_line)
+        except Exception as e:
+            print(f"  ⚠ MCP [{self.name}] 通信错误: {e}")
+        return None
+
+    def _send_notify(self, msg: dict):
+        """发送通知（不需要响应）"""
+        import json
+        if self.process and self.process.stdin:
+            self.process.stdin.write(json.dumps(msg, ensure_ascii=False) + "\n")
+            self.process.stdin.flush()
+
+    def call_tool(self, name: str, arguments: dict) -> str:
+        """调用 MCP 工具"""
+        resp = self._send({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments}
+        })
+        if resp and "result" in resp:
+            contents = resp["result"].get("content", [])
+            texts = [c["text"] for c in contents if c.get("type") == "text"]
+            return "\n".join(texts) if texts else "(空返回)"
+        if resp and "error" in resp:
+            return f"[MCP错误] {resp['error'].get('message','')}"
+        return "[MCP通信失败]"
+
+    def get_tools(self) -> list:
+        return self._tools
+
+    def close(self):
+        if self.process:
+            self.process.terminate()
+            self.process = None
+
+
 class MCPLoaderPlugin(PluginBase):
-    name = "mcp_loader"; version = "1.0.0"; description = "从 mcp/ 加载外部工具"
-    def setup(self): MCP_CONFIG_DIR.mkdir(exist_ok=True)
+    name = "mcp_loader"; version = "1.0.0"; description = "加载 MCP Server（本地进程或远程）"
+    def setup(self):
+        MCP_CONFIG_DIR.mkdir(exist_ok=True)
+        self._clients = []
     def register_tools(self):
-        import importlib.util
+        # 启动配置目录中的 MCP Server
+        for f in sorted(MCP_CONFIG_DIR.glob("*.mcp.json")):
+            try:
+                data = json.loads(f.read_text())
+                server_config = data.get("server", {})
+                name = server_config.get("name", f.stem)
+                command = server_config.get("command", [])
+                if command:
+                    client = MCPClient(name, command)
+                    if client.connect():
+                        self._clients.append(client)
+                        for td in client.get_tools():
+                            ToolRegistry.register(MCPToolWrapper(
+                                td["name"],
+                                td.get("description", ""),
+                                td.get("inputSchema", {}),
+                                mcp_client=client,
+                            ))
+            except Exception as e:
+                print(f"  ⚠ MCP 配置加载失败 {f.name}: {e}")
+        # 兼容旧的纯声明式配置
         for f in MCP_CONFIG_DIR.glob("*.mcp.json"):
             try:
                 data = json.loads(f.read_text())
-                for td in data.get("tools", []):
-                    ToolRegistry.register(MCPToolWrapper(td["name"], td.get("description",""), td.get("parameters",{})))
-                    print(f"    └─ MCP: {td['name']}")
-            except: pass
+                if "server" not in data:  # 旧格式
+                    for td in data.get("tools", []):
+                        ToolRegistry.register(MCPToolWrapper(td["name"], td.get("description",""), td.get("parameters",{})))
+                        print(f"    └─ MCP(声明): {td['name']}")
+            except:
+                pass
 
 MCP_CONFIG_DIR.mkdir(exist_ok=True)
 
 class MCPToolWrapper:
-    def __init__(self, name, description, params):
+    def __init__(self, name, description, params, mcp_client=None):
         self.name, self.description, self._params = name, description, params
+        self._mcp_client = mcp_client
     def openai_schema(self) -> dict:
-        return {"type":"function","function":{"name":self.name,"description":self.description,"parameters":self._params}}
-    def __call__(self, **kwargs) -> str: return f"[外部工具 {self.name}] {kwargs}"
+        # MCP 用的是 inputSchema，OpenAI 用的是 parameters
+        schema = self._params.get("properties", self._params)
+        required = self._params.get("required", [])
+        return {"type":"function","function":{"name":self.name,"description":self.description,
+                "parameters":{"type":"object","properties":schema,"required":required}}}
+    def __call__(self, **kwargs) -> str:
+        if self._mcp_client:
+            return self._mcp_client.call_tool(self.name, kwargs)
+        return f"[外部工具 {self.name}] {kwargs}"
 
 
 # ═══════════════════════════════════════════════
@@ -650,6 +774,104 @@ class RunShell(ToolBase):
     def run(self,command:str,workdir:str=".")->str:
         """command:要执行的 Shell 命令\nworkdir:执行目录"""
         return shell_impl(command,workdir)
+
+class WebSearch(ToolBase):
+    name="web_search"
+    description="搜索互联网获取实时信息。返回相关网页的标题和摘要。适用于天气、新闻、百科等实时内容查询。"
+    def run(self, query: str) -> str:
+        """query:搜索关键词"""
+        import subprocess, json, urllib.parse
+        # 通过 privoxy 代理调 Google 搜索
+        quoted = urllib.parse.quote(query)
+        cmd = f"""curl -sS -m 12 --proxy http://127.0.0.1:8118 -A 'Mozilla/5.0' 'https://www.google.com/search?q={quoted}&num=5' 2>/dev/null | python3 -c "
+import sys, re
+html=sys.stdin.read()
+seen=set()
+for h3 in re.findall(r'<h3[^>]*>(.*?)</h3>', html, re.DOTALL):
+    t=re.sub(r'<[^>]+>','',h3).strip()
+    if t and t not in seen:
+        seen.add(t)
+        print('• '+t)
+if not seen:
+    for div in re.findall(r'<div[^>]*role=\"heading\"[^>]*>(.*?)</div>', html, re.DOTALL)[:5]:
+        t=re.sub(r'<[^>]+>','',div).strip()
+        if t and t not in seen:
+            seen.add(t)
+            print('• '+t)
+if not seen:
+    print('(暂无结果)')
+" """
+        try:
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+            out = result.stdout.strip()
+            return out if out else f"(搜索 '{query}' 暂无结果)"
+        except subprocess.TimeoutExpired:
+            return "[搜索超时]"
+
+
+class ReadWebDAV(ToolBase):
+    name="read_webdav"
+    description="从 WebDAV 服务器（NAS/网盘）读取文件内容。支持查看 Obsidian 笔记。路径示例：onedrive/应用/remotely-save/obau/"
+    def run(self, path: str) -> str:
+        """path:WebDAV 上的文件路径"""
+        import subprocess, json
+        remote = f"shenzhen_webdav:{path}"
+        try:
+            result = subprocess.run(
+                ["rclone", "cat", remote, "--no-check-certificate"],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                return result.stdout[:4000] or "(空文件)"
+            return f"[错误] {result.stderr.strip()[:200]}"
+        except subprocess.TimeoutExpired:
+            return "[超时] 文件过大"
+        except FileNotFoundError:
+            return "[错误] rclone 未安装"
+
+class ListWebDAV(ToolBase):
+    name="list_webdav"
+    description="列出 WebDAV 服务器上的目录内容。支持浏览 Obsidian 笔记目录。路径示例：onedrive/应用/remotely-save/obau/"
+    def run(self, path: str) -> str:
+        """path:WebDAV 上的目录路径"""
+        import subprocess
+        remote = f"shenzhen_webdav:{path}"
+        try:
+            result = subprocess.run(
+                ["rclone", "lsf", remote, "--no-check-certificate"],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                lines = result.stdout.strip().split("\n")
+                if not lines or lines == [""]:
+                    return "(空目录)"
+                return "文件列表:\n" + "\n".join(f"  {l}" for l in lines[:30])
+            return f"[错误] {result.stderr.strip()[:200]}"
+        except subprocess.TimeoutExpired:
+            return "[超时]"
+        except FileNotFoundError:
+            return "[错误] rclone 未安装"
+
+
+class WriteWebDAV(ToolBase):
+    name="write_webdav"
+    description="向 WebDAV 服务器（NAS/网盘）写入文件。适用于保存笔记、记录信息。路径示例：onedrive/应用/remotely-save/obau/00-笔记/文件名.md"
+    def run(self, path: str, content: str) -> str:
+        """path:文件路径\ncontent:文件内容"""
+        import subprocess
+        remote = f"shenzhen_webdav:{path}"
+        try:
+            result = subprocess.run(
+                ["rclone", "rcat", remote, "--no-check-certificate"],
+                input=content, capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                return f"已写入 {path}"
+            return f"[错误] {result.stderr.strip()[:200]}"
+        except subprocess.TimeoutExpired:
+            return "[超时]"
+        except FileNotFoundError:
+            return "[错误] rclone 未安装"
 
 
 # ═══════════════════════════════════════════════

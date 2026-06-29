@@ -1,0 +1,55 @@
+{
+  "id": "20260629_185300",
+  "time": "2026-06-29T18:53:00.087395",
+  "model": "deepseek-chat",
+  "input": "搜索深圳今天天气",
+  "result": "## 深圳今日天气 🌤️\n\n| 项目 | 情况 |\n|------|------|\n| 🌡️ 气温 | **26°C** |\n| ☁️ 天气 | **多云** |\n\n深圳今天多云，气温26°C，体感较为舒适，适合户外活动。不过出门建议带件薄外套，以防天气变化哦～",
+  "trace": {
+    "spans": [
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782730376.0494237,
+        "end": 1782730378.1586277,
+        "duration_ms": 2109,
+        "input_tokens": 1078,
+        "output_tokens": 52,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "get_weather",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "city": "深圳"
+        },
+        "result": "26°C,多云",
+        "status": "ok"
+      },
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782730378.1589262,
+        "end": 1782730380.0873024,
+        "duration_ms": 1928,
+        "input_tokens": 1146,
+        "output_tokens": 76,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      }
+    ],
+    "total_llm_calls": 2,
+    "total_tool_calls": 1,
+    "total_duration_ms": 4037
+  }
+}

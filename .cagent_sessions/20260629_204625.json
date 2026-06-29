@@ -1,0 +1,126 @@
+{
+  "id": "20260629_204625",
+  "time": "2026-06-29T20:46:25.452821",
+  "model": "deepseek-chat",
+  "input": "搜索深圳天气",
+  "result": "当前深圳天气 ☀️：\n\n- **气温**：26°C\n- **天气状况**：多云\n\n总体感觉比较舒适，适合户外活动~",
+  "trace": {
+    "spans": [
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782737171.3299763,
+        "end": 1782737173.4656374,
+        "duration_ms": 2136,
+        "input_tokens": 1622,
+        "output_tokens": 45,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "baidu_search",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 280,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "query": "深圳天气"
+        },
+        "result": "(搜索 '深圳天气' 暂无结果)",
+        "status": "ok"
+      },
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782737173.7468836,
+        "end": 1782737175.5352836,
+        "duration_ms": 1788,
+        "input_tokens": 1687,
+        "output_tokens": 99,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      },
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782737183.1115067,
+        "end": 1782737184.3685026,
+        "duration_ms": 1257,
+        "input_tokens": 1618,
+        "output_tokens": 44,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "get_weather",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "city": "深圳"
+        },
+        "result": "26°C,多云",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "web_search",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 9653,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "query": "深圳天气 今日"
+        },
+        "result": "(暂无结果)",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "get_weather",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "city": "深圳"
+        },
+        "result": "26°C,多云",
+        "status": "ok"
+      },
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782737185.188674,
+        "end": 1782737185.4525602,
+        "duration_ms": 264,
+        "input_tokens": 1679,
+        "output_tokens": 33,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      }
+    ],
+    "total_llm_calls": 4,
+    "total_tool_calls": 4,
+    "total_duration_ms": 15378
+  }
+}
