@@ -15,7 +15,7 @@
 | MCP 协议 | Ch07 MCP 协议 | `v7` — MCPClient 外部工具发现、动态加载 | ✅ |
 | 插件生态 | Ch08 插件生态 | `v8` — PluginBase/PluginManager + 3 内置插件 | ✅ |
 | 多 Agent | Ch09 多 Agent | `v9` — SubAgent 委派、独立上下文、结果汇总 | ✅ |
-| CLI 传输层 | Ch10 CLI 传输 | 多种运行模式 | ⏳ |
+|| CLI 传输层 | Ch10 CLI 传输 | `v10` — REPL/Interactive/SSE 多模式 + Transport 抽象接口 | ✅ |
 
 ## 运行
 
@@ -23,9 +23,15 @@
 # 先配好 API key
 export OPENAI_API_KEY="sk-xxx"
 
-# 运行
+# 单次查询（向后兼容）
 python3 agent.py "今天深圳多少度？"
 
-# 自定义输入
-python3 agent.py "帮我算 25 * 4，然后查一下北京的天气"
+# REPL 模式（基础交互）
+python3 agent.py --repl
+
+# 增强交互模式（彩色输出 + 分隔线）
+python3 agent.py --interactive
+
+# SSE 服务模式（NDJSON 流式输出，供外部程序消费）
+python3 agent.py --serve
 ```

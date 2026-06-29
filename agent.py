@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-CAgent v9 — 多 Agent 协作
+CAgent v10 — CLI 传输层
 ================================
-对照 Claude Code Ch09: 多 Agent
-- SubAgentManager: 派生子 Agent 处理子任务
-- delegate 工具: LLM 可在对话中委派子任务
-- 子 Agent 有独立的消息上下文
-- 结果汇总后回主 Agent
+对照 Claude Code Ch10: CLI 传输层
+- 多模式入口: --repl / --interactive / --serve / 直接 query
+- Transport 抽象接口
+- REPLTransport: 交互式命令行循环
+- InteractiveTransport: 增强版 TUI 交互（带颜色、历史）
+- SSETransport: Server-Sent Events 流式输出
+- 向后兼容: python3 agent.py "query" 行为不变
 """
 
 import json
@@ -16,6 +18,9 @@ import inspect
 import subprocess
 import threading
 import queue
+import select
+import time
+import shutil
 from pathlib import Path
 from openai import OpenAI
 
@@ -34,6 +39,172 @@ CLIENT = OpenAI(
 )
 MODEL = os.environ.get("CA_LLM_MODEL", "deepseek-chat")
 MAX_TURNS = 20
+
+
+# ═══════════════════════════════════════════════
+# Ch10: CLI 传输层
+# ═══════════════════════════════════════════════
+
+class Transport:
+    """
+    传输层抽象接口。
+    定义 Agent 与用户之间如何交换消息——终端、HTTP、SDK 等。
+    """
+    def send(self, text: str):
+        """向用户发送文本"""
+        raise NotImplementedError
+    def send_stream(self, text: str):
+        """向用户发送流式文本片段（可选实现）"""
+        self.send(text)
+    def send_tool_start(self, name: str, args: dict):
+        """通知用户工具开始调用"""
+        pass
+    def send_tool_result(self, name: str, result: str):
+        """通知用户工具返回结果"""
+        pass
+    def send_error(self, msg: str):
+        """向用户发送错误信息"""
+        self.send(f"[错误] {msg}")
+    def receive(self) -> str:
+        """从用户接收一条消息"""
+        raise NotImplementedError
+    def running(self) -> bool:
+        """传输层是否仍在运行"""
+        return True
+
+
+class REPLTransport(Transport):
+    """
+    基础 REPL 传输层。
+    终端交互模式，支持多轮对话。
+    """
+    def __init__(self):
+        self._active = True
+
+    def send(self, text: str):
+        print(f"\n🤖 {text}")
+
+    def send_stream(self, text: str):
+        print(text, end="", flush=True)
+
+    def send_tool_start(self, name: str, args: dict):
+        print(f"\n  🔧 {name}({json.dumps(args, ensure_ascii=False)[:80]})", end="", flush=True)
+
+    def send_tool_result(self, name: str, result: str):
+        print(f" → {result[:60]}...", flush=True)
+
+    def send_error(self, msg: str):
+        print(f"\n⚠️  {msg}", file=sys.stderr)
+
+    def receive(self) -> str:
+        try:
+            text = input("\n🧑 ").strip()
+            if text.lower() in ("/quit", "/exit", "/q"):
+                self._active = False
+                return ""
+            if text.lower() == "/help":
+                print("  /quit /exit /q — 退出\n  /help — 帮助\n  /reset — 重置对话")
+                return self.receive()
+            return text
+        except (EOFError, KeyboardInterrupt):
+            self._active = False
+            return ""
+
+    def running(self) -> bool:
+        return self._active
+
+
+class InteractiveTransport(Transport):
+    """
+    增强版交互传输层。
+    带颜色输出、命令历史、更好的格式。
+    """
+    def __init__(self):
+        self._active = True
+        self._has_color = sys.stdout.isatty() and os.name != "nt"
+
+    def _color(self, text: str, code: str) -> str:
+        if not self._has_color:
+            return text
+        codes = {"green": "32", "cyan": "36", "yellow": "33", "red": "31", "blue": "34", "bold": "1", "dim": "2"}
+        c = codes.get(code, "0")
+        return f"\033[{c}m{text}\033[0m"
+
+    def send(self, text: str):
+        separator = self._color("─" * shutil.get_terminal_size().columns, "dim")
+        print(f"\n{separator}")
+        print(f"{self._color('Agent', 'cyan')}  {text}")
+
+    def send_stream(self, text: str):
+        print(self._color(text, "green"), end="", flush=True)
+
+    def send_tool_start(self, name: str, args: dict):
+        args_str = json.dumps(args, ensure_ascii=False)[:80]
+        print(f"\n  {self._color('🔧', 'yellow')} {self._color(name, 'bold')}({args_str})", end="", flush=True)
+
+    def send_tool_result(self, name: str, result: str):
+        print(self._color(f" ✓ {result[:50]}", "dim"), flush=True)
+
+    def receive(self) -> str:
+        try:
+            text = input(f"\n{self._color('You', 'blue')}  ").strip()
+            if text.lower() in ("/quit", "/exit", "/q"):
+                self._active = False
+                return ""
+            if text.lower() == "/help":
+                print(self._color("  /quit 退出  /help 帮助  /reset 重置", "dim"))
+                return self.receive()
+            return text
+        except (EOFError, KeyboardInterrupt):
+            self._active = False
+            return ""
+
+    def running(self) -> bool:
+        return self._active
+
+
+class SSETransport(Transport):
+    """
+    SSE (Server-Sent Events) 传输层。
+    通过 stdout 输出 NDJSON 格式的事件流，供外部程序消费。
+    格式: data: {"type": "text|tool_start|tool_result|error|done", "content": "..."}
+    """
+    def __init__(self):
+        self._active = True
+
+    def _emit(self, event_type: str, content: str):
+        data = json.dumps({"type": event_type, "content": content}, ensure_ascii=False)
+        print(f"data: {data}\n", flush=True)
+
+    def send(self, text: str):
+        self._emit("text", text)
+
+    def send_stream(self, text: str):
+        self._emit("text", text)
+
+    def send_tool_start(self, name: str, args: dict):
+        self._emit("tool_start", json.dumps({"name": name, "args": args}, ensure_ascii=False))
+
+    def send_tool_result(self, name: str, result: str):
+        self._emit("tool_result", json.dumps({"name": name, "result": result[:200]}, ensure_ascii=False))
+
+    def send_error(self, msg: str):
+        self._emit("error", msg)
+
+    def receive(self) -> str:
+        # SSE 模式下 stdin 读一行作为输入
+        try:
+            line = sys.stdin.readline()
+            if not line:
+                self._active = False
+                return ""
+            return json.loads(line).get("content", "")
+        except (json.JSONDecodeError, EOFError, KeyboardInterrupt):
+            self._active = False
+            return ""
+
+    def running(self) -> bool:
+        return self._active
 
 
 # ═══════════════════════════════════════════════
@@ -508,49 +679,128 @@ class ListSubAgents(ToolBase):
         lines = [f"- {a['name']}: {a['status']} ({a['messages']} 条消息)" for a in agents]
         return "子 Agent 列表:\n" + "\n".join(lines)
 
+# ═══════════════════════════════════════════════
+# Ch10: 传输工具
+# ═══════════════════════════════════════════════
+
+class EchoStream(ToolBase):
+    name="echo_stream"
+    description="流式输出一段文本给用户（用于测试流式效果）"
+    def run(self, text: str) -> str:
+        """text:要输出的文本"""
+        return text
+
 
 # ═══════════════════════════════════════════════
 # Agent 循环
 # ═══════════════════════════════════════════════
 
-def agent_loop(user_input: str) -> str:
+def agent_loop(user_input: str, transport: Transport = None) -> str:
+    """带传输层的 Agent 循环"""
+    if transport is None:
+        transport = REPLTransport()
+
     sp = SystemPrompt()
     sp.add_modules(PM.get_prompt_modules())
     system_prompt = sp.render()
 
-    messages = [{"role":"system","content":system_prompt},{"role":"user","content":user_input}]
+    messages = [{"role":"system","content":system_prompt}, {"role":"user","content":user_input}]
     for m in messages: CTX.add_message(m)
     tools = ToolRegistry.get_openai_tools()
-    print(f"📦 {ToolRegistry.list_tools()}")
-    print(f"📊 {CTX.get_usage_report()}")
+    transport.send(f"📦 {ToolRegistry.list_tools()}")
+    transport.send(f"📊 {CTX.get_usage_report()}")
 
     for turn in range(1, MAX_TURNS+1):
-        print(f"\n── 第 {turn} 轮 ──")
+        transport.send(f"\n── 第 {turn} 轮 ──")
         if CTX.should_compress(): messages = CTX.compress(messages)
         response = CLIENT.chat.completions.create(model=MODEL, messages=messages, tools=tools)
         msg = response.choices[0].message
         messages.append(msg); CTX.add_message(msg)
         if not msg.tool_calls:
-            print(f"  → {msg.content[:80]}..."); return msg.content or "(空回答)"
+            result = msg.content or "(空回答)"
+            transport.send(result)
+            return result
+
         for tc in msg.tool_calls:
-            fn,args = tc.function.name, json.loads(tc.function.arguments)
-            print(f"  → {fn}({args})")
+            fn, args = tc.function.name, json.loads(tc.function.arguments)
+            transport.send_tool_start(fn, args)
             result = ToolRegistry.execute(fn, **args)
-            print(f"  ← {result[:80]}...")
+            transport.send_tool_result(fn, result)
             tm = {"role":"tool","tool_call_id":tc.id,"content":str(result)}
             messages.append(tm); CTX.add_message(tm)
+
     return "达到最大轮次"
 
 
+def interactive_session(transport: Transport):
+    """
+    多轮交互会话。
+    在 transport 的 receive/send 循环中持续对话，直到用户退出。
+    """
+    transport.send("CAgent v10 — CLI 传输层模式")
+    transport.send(f"模型: {MODEL} | 工具: {ToolRegistry.list_tools()}")
+    transport.send("输入 /help 查看命令, /quit 退出")
+
+    messages_cache = []
+
+    while transport.running():
+        user_input = transport.receive()
+        if not user_input:
+            continue
+
+        if user_input.lower() == "/reset":
+            messages_cache = []
+            CTX.token_counts = []
+            CTX.compression_count = 0
+            transport.send("对话已重置 ✓")
+            continue
+
+        transport.send_tool_start("agent_loop", {"input": user_input[:60]})
+        result = agent_loop(user_input, transport)
+        transport.send_tool_result("agent_loop", result)
+        transport.send(f"✅ {result}")
+
+
 # ─── 入口 ─────────────────────────────────────
-if __name__ == "__main__":
+
+def main():
+    import importlib.util
     count = PM.discover_and_load()
     if count == 0:
         PM.plugins["mcp_loader"] = MCPLoaderPlugin()
         print(f"  🔌 加载 1 个内置插件")
     PM.activate_all()
 
-    prompt = sys.argv[1] if len(sys.argv) > 1 else "帮我查深圳天气和北京天气，让不同的子 Agent 分别查"
+    # 解析命令行参数
+    args = sys.argv[1:]
+
+    if "--serve" in args:
+        # HTTP 服务模式（SSE 基础，后续可扩展为 HTTP 服务器）
+        transport = SSETransport()
+        while transport.running():
+            user_input = transport.receive()
+            if user_input:
+                result = agent_loop(user_input, transport)
+        return
+
+    if "--repl" in args:
+        # REPL 模式
+        transport = REPLTransport()
+        interactive_session(transport)
+        return
+
+    if "--interactive" in args:
+        # 增强交互模式
+        transport = InteractiveTransport()
+        interactive_session(transport)
+        return
+
+    # 默认：单次查询（向后兼容）
+    prompt = args[0] if args else "帮我查深圳天气和北京天气，让不同的子 Agent 分别查"
     print(f"🧑 用户: {prompt}")
     result = agent_loop(prompt)
     print(f"\n✅ {result}")
+
+
+if __name__ == "__main__":
+    main()
