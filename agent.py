@@ -774,13 +774,256 @@ def main():
     # 解析命令行参数
     args = sys.argv[1:]
 
-    if "--serve" in args:
-        # HTTP 服务模式（SSE 基础，后续可扩展为 HTTP 服务器）
-        transport = SSETransport()
-        while transport.running():
-            user_input = transport.receive()
-            if user_input:
-                result = agent_loop(user_input, transport)
+    if "--web" in args or "--serve" in args:
+        # HTTP Web 服务模式
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        import urllib.parse
+
+        PORT = 3201
+        HOST = "0.0.0.0"
+
+        class WebTransport(Transport):
+            """HTTP 传输层。通过队列传递消息，由请求处理器读写。"""
+            def __init__(self):
+                super().__init__()
+                self._queue = queue.Queue()
+                self._response = queue.Queue()
+                self._active = True
+            def send(self, text: str):
+                self._queue.put(("text", text))
+            def send_tool_start(self, name: str, args: dict):
+                self._queue.put(("tool_start", json.dumps({"name": name, "args": args}, ensure_ascii=False)))
+            def send_tool_result(self, name: str, result: str):
+                self._queue.put(("tool_result", json.dumps({"name": name, "result": result[:300]}, ensure_ascii=False)))
+            def send_error(self, msg: str):
+                self._queue.put(("error", msg))
+            def receive(self) -> str:
+                return self._response.get()
+            def put_input(self, text: str):
+                self._response.put(text)
+            def get_events(self):
+                events = []
+                while not self._queue.empty():
+                    events.append(self._queue.get_nowait())
+                return events
+            def running(self) -> bool:
+                return self._active
+
+        WT = WebTransport()
+
+        HTML = r"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CAgent Web</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; height: 100vh; display: flex; flex-direction: column; }
+.header { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 12px 20px; display: flex; align-items: center; gap: 12px; }
+.header h1 { font-size: 18px; font-weight: 600; }
+.header .badge { font-size: 11px; background: #e8f5e9; color: #2e7d32; padding: 2px 8px; border-radius: 10px; }
+.header .info { font-size: 12px; color: #888; margin-left: auto; }
+#chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; line-height: 1.5; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+.msg.user { background: #e3f2fd; align-self: flex-end; border-bottom-right-radius: 4px; }
+.msg.agent { background: #fff; align-self: flex-start; border: 1px solid #e0e0e0; border-bottom-left-radius: 4px; }
+.msg.tool { background: #fff8e1; align-self: flex-start; font-size: 13px; font-family: 'SF Mono', Monaco, monospace; color: #666; border: 1px solid #ffe082; border-radius: 6px; padding: 8px 12px; }
+.msg.error { background: #ffebee; align-self: flex-start; color: #c62828; border: 1px solid #ef9a9a; }
+.msg .time { font-size: 11px; color: #aaa; margin-top: 4px; text-align: right; }
+.input-bar { background: #fff; border-top: 1px solid #e0e0e0; padding: 12px 20px; display: flex; gap: 10px; }
+.input-bar input { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 10px 14px; font-size: 14px; outline: none; }
+.input-bar input:focus { border-color: #1976d2; }
+.input-bar button { background: #1976d2; color: #fff; border: none; border-radius: 8px; padding: 10px 20px; font-size: 14px; cursor: pointer; font-weight: 500; }
+.input-bar button:hover { background: #1565c0; }
+.input-bar button:disabled { background: #90caf9; cursor: not-allowed; }
+.loading { display: inline-block; width: 12px; height: 12px; border: 2px solid #ccc; border-top-color: #1976d2; border-radius: 50%; animation: spin .6s linear infinite; margin-left: 8px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+pre { margin: 4px 0; }
+code { background: #f5f5f5; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>CAgent</h1>
+  <span class="badge">v10</span>
+  <span class="info" id="status">已连接</span>
+</div>
+<div id="chat"></div>
+<div class="input-bar">
+  <input id="input" type="text" placeholder="输入消息..." autofocus>
+  <button id="send" onclick="send()">发送</button>
+</div>
+<script>
+const chat = document.getElementById('chat');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+let es = null;
+let loadingEl = null;
+
+function addMsg(type, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + type;
+  div.textContent = text;
+  if (type === 'tool') {
+    div.innerHTML = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+  }
+  const time = document.createElement('div');
+  time.className = 'time';
+  time.textContent = new Date().toLocaleTimeString();
+  div.appendChild(time);
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function showLoading() {
+  if (loadingEl) return;
+  loadingEl = document.createElement('div');
+  loadingEl.className = 'msg agent';
+  loadingEl.innerHTML = '<span class="loading"></span> 思考中...';
+  chat.appendChild(loadingEl);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function hideLoading() {
+  if (loadingEl) { loadingEl.remove(); loadingEl = null; }
+}
+
+function send() {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addMsg('user', text);
+  showLoading();
+  sendBtn.disabled = true;
+
+  fetch('/api/chat', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text})
+  }).then(r => r.json()).then(data => {
+    if (data.ok) {
+      startSSE(data.session_id);
+    } else {
+      hideLoading();
+      addMsg('error', '请求失败: ' + (data.error || '未知错误'));
+      sendBtn.disabled = false;
+    }
+  }).catch(e => {
+    hideLoading();
+    addMsg('error', '网络错误: ' + e.message);
+    sendBtn.disabled = false;
+  });
+}
+
+function startSSE(sessionId) {
+  if (es) es.close();
+  es = new EventSource('/api/stream?session_id=' + sessionId);
+  es.onmessage = function(e) {
+    try {
+      const data = JSON.parse(e.data);
+      hideLoading();
+      if (data.type === 'text') {
+        addMsg('agent', data.content);
+        sendBtn.disabled = false;
+      } else if (data.type === 'tool_start') {
+        addMsg('tool', '🔧 ' + data.content);
+      } else if (data.type === 'tool_result') {
+        // tool result already shown with start
+      } else if (data.type === 'error') {
+        addMsg('error', data.content);
+        sendBtn.disabled = false;
+      } else if (data.type === 'done') {
+        sendBtn.disabled = false;
+        es.close();
+        es = null;
+      }
+    } catch(e) {}
+  };
+  es.onerror = function() {
+    hideLoading();
+    sendBtn.disabled = false;
+    es.close();
+    es = null;
+  };
+}
+
+input.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !sendBtn.disabled) send();
+});
+</script>
+</body>
+</html>"""
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                parsed = urllib.parse.urlparse(self.path)
+                if parsed.path == "/":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(HTML.encode("utf-8"))
+                elif parsed.path == "/api/stream":
+                    params = urllib.parse.parse_qs(parsed.query)
+                    session_id = params.get("session_id", [""])[0]
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    while True:
+                        events = WT.get_events()
+                        for typ, content in events:
+                            data = json.dumps({"type": typ, "content": content}, ensure_ascii=False)
+                            line = f"data: {data}\n\n"
+                            try:
+                                self.wfile.write(line.encode("utf-8"))
+                                self.wfile.flush()
+                            except BrokenPipeError:
+                                return
+                        import time
+                        time.sleep(0.1)
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def do_POST(self):
+                parsed = urllib.parse.urlparse(self.path)
+                if parsed.path == "/api/chat":
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = json.loads(self.rfile.read(length))
+                    text = body.get("text", "")
+                    import uuid
+                    session_id = str(uuid.uuid4())[:8]
+                    def _run():
+                        try:
+                            result = agent_loop(text, WT)
+                            WT.get_events()  # flush remaining
+                        except Exception as e:
+                            WT.send_error(str(e))
+                    import threading
+                    t = threading.Thread(target=_run, daemon=True)
+                    t.start()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": True, "session_id": session_id}).encode())
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def log_message(self, format, *args):
+                pass  # 安静运行
+
+        server = HTTPServer((HOST, PORT), Handler)
+        print(f"🌐 CAgent Web 服务启动: http://{HOST}:{PORT}")
+        print(f"   局域网其他设备: http://{HOST}:{PORT} (WSL 需 Windows 转发)")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\n🛑 服务关闭")
+            server.server_close()
         return
 
     if "--repl" in args:

@@ -34,4 +34,7 @@ python3 agent.py --interactive
 
 # SSE 服务模式（NDJSON 流式输出，供外部程序消费）
 python3 agent.py --serve
+
+# Web 页面模式（内置 HTTP 服务器 + 浏览器 UI）
+python3 agent.py --web
 ```
