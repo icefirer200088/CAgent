@@ -692,6 +692,155 @@ class EchoStream(ToolBase):
 
 
 # ═══════════════════════════════════════════════
+# Tracer: 可观测性
+# ═══════════════════════════════════════════════
+
+import time as _time
+import dataclasses
+
+@dataclasses.dataclass
+class TraceSpan:
+    """一次 LLM 调用或 Tool 调用的完整记录"""
+    type: str  # "llm_call" | "tool_call" | "compression"
+    name: str
+    start: float
+    end: float = 0
+    duration_ms: float = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_hit: bool = False
+    args: dict = None
+    result: str = ""
+    status: str = "ok"  # ok | error | timeout
+
+class Tracer:
+    """记录 agent_loop 内部的所有关键事件"""
+    def __init__(self):
+        self.spans: list[TraceSpan] = []
+        self._current: TraceSpan | None = None
+
+    def start_llm(self) -> TraceSpan:
+        span = TraceSpan(type="llm_call", name="LLM", start=_time.time())
+        self._current = span
+        return span
+
+    def end_llm(self, usage=None):
+        if self._current:
+            self._current.end = _time.time()
+            self._current.duration_ms = round((self._current.end - self._current.start) * 1000)
+            if usage:
+                self._current.input_tokens = usage.prompt_tokens or 0
+                self._current.output_tokens = usage.completion_tokens or 0
+            self.spans.append(self._current)
+            self._current = None
+
+    def add_tool(self, name: str, args: dict, result: str, duration_ms: float):
+        self.spans.append(TraceSpan(
+            type="tool_call", name=name, start=0, end=0,
+            duration_ms=round(duration_ms), args=args, result=result[:200],
+        ))
+
+    def add_compression(self, before: int, after: int):
+        self.spans.append(TraceSpan(
+            type="compression", name=f"compress {before}→{after}", start=0, end=0,
+        ))
+
+    def summary(self) -> str:
+        lines = ["\n## Tracer 报告"]
+        llm_calls = [s for s in self.spans if s.type == "llm_call"]
+        tool_calls = [s for s in self.spans if s.type == "tool_call"]
+        if llm_calls:
+            total_in = sum(s.input_tokens for s in llm_calls)
+            total_out = sum(s.output_tokens for s in llm_calls)
+            total_ms = sum(s.duration_ms for s in llm_calls)
+            lines.append(f"LLM: {len(llm_calls)} 次, {total_in}→{total_out} tokens, {total_ms}ms")
+        if tool_calls:
+            lines.append(f"工具: {len(tool_calls)} 次")
+            for s in tool_calls:
+                lines.append(f"  - {s.name}({s.args}) {s.duration_ms}ms")
+        return "\n".join(lines)
+
+    def to_dict(self) -> dict:
+        return {
+            "spans": [dataclasses.asdict(s) for s in self.spans],
+            "total_llm_calls": len([s for s in self.spans if s.type == "llm_call"]),
+            "total_tool_calls": len([s for s in self.spans if s.type == "tool_call"]),
+            "total_duration_ms": round(sum(s.duration_ms for s in self.spans)),
+        }
+
+TRACER = Tracer()
+
+
+# ═══════════════════════════════════════════════
+# 会话持久化
+# ═══════════════════════════════════════════════
+
+import datetime
+
+SESSION_DIR = Path(__file__).parent / ".cagent_sessions"
+SESSION_DIR.mkdir(exist_ok=True)
+
+class SessionStore:
+    """保存每次对话的 tracer 数据和摘要到磁盘。"""
+
+    @staticmethod
+    def save(tracer: Tracer, user_input: str, result: str, model: str):
+        now = datetime.datetime.now()
+        session_id = now.strftime("%Y%m%d_%H%M%S")
+        data = {
+            "id": session_id,
+            "time": now.isoformat(),
+            "model": model,
+            "input": user_input[:500],
+            "result": result[:500],
+            "trace": tracer.to_dict(),
+        }
+        file = SESSION_DIR / f"{session_id}.json"
+        file.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        return session_id
+
+    @staticmethod
+    def list_recent(n: int = 10) -> list[dict]:
+        files = sorted(SESSION_DIR.glob("*.json"), reverse=True)[:n]
+        sessions = []
+        for f in files:
+            d = json.loads(f.read_text())
+            sessions.append({
+                "id": d["id"],
+                "time": d["time"],
+                "model": d["model"],
+                "input": d["input"][:80],
+                "llm_calls": d["trace"]["total_llm_calls"],
+                "tool_calls": d["trace"]["total_tool_calls"],
+                "tokens_in": sum(s["input_tokens"] for s in d["trace"]["spans"] if s["type"] == "llm_call"),
+                "tokens_out": sum(s["output_tokens"] for s in d["trace"]["spans"] if s["type"] == "llm_call"),
+                "duration_ms": d["trace"]["total_duration_ms"],
+            })
+        return sessions
+
+    @staticmethod
+    def get(session_id: str) -> dict | None:
+        f = SESSION_DIR / f"{session_id}.json"
+        if f.exists():
+            return json.loads(f.read_text())
+        return None
+
+    @staticmethod
+    def summary() -> str:
+        sessions = SessionStore.list_recent(20)
+        if not sessions:
+            return "暂无对话记录"
+        total_in = sum(s["tokens_in"] for s in sessions)
+        total_out = sum(s["tokens_out"] for s in sessions)
+        total_ms = sum(s["duration_ms"] for s in sessions)
+        lines = [f"## 对话历史（最近 {len(sessions)} 条）"]
+        lines.append(f"总计: 输入 {total_in:,} tokens → 输出 {total_out:,} tokens, 耗时 {total_ms}ms")
+        for s in sessions:
+            lines.append(f"  {s['id']}  {s['input'][:50]:50s}  LLM:{s['llm_calls']}  T:{s['tool_calls']}  {s['tokens_in']:>6}→{s['tokens_out']:<6}  {s['duration_ms']}ms")
+        return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════
 # Agent 循环
 # ═══════════════════════════════════════════════
 
@@ -712,19 +861,33 @@ def agent_loop(user_input: str, transport: Transport = None) -> str:
 
     for turn in range(1, MAX_TURNS+1):
         transport.send(f"\n── 第 {turn} 轮 ──")
-        if CTX.should_compress(): messages = CTX.compress(messages)
+        if CTX.should_compress():
+            before = CTX.total_used()
+            messages = CTX.compress(messages)
+            after = CTX.total_used()
+            TRACER.add_compression(before, after)
+        TRACER.start_llm()
         response = CLIENT.chat.completions.create(model=MODEL, messages=messages, tools=tools)
         msg = response.choices[0].message
+        TRACER.end_llm(response.usage)
         messages.append(msg); CTX.add_message(msg)
         if not msg.tool_calls:
             result = msg.content or "(空回答)"
             transport.send(result)
+            transport.send(TRACER.summary())
+            # 如果 transport 是 WebTransport，把 tracer 数据作为结构化事件推
+            if hasattr(transport, '_queue'):
+                trace_json = json.dumps(TRACER.to_dict(), ensure_ascii=False)
+                transport._queue.put(("trace", trace_json))
+            SessionStore.save(TRACER, user_input, result, MODEL)
             return result
 
         for tc in msg.tool_calls:
             fn, args = tc.function.name, json.loads(tc.function.arguments)
             transport.send_tool_start(fn, args)
+            t0 = _time.time()
             result = ToolRegistry.execute(fn, **args)
+            TRACER.add_tool(fn, args, result, (_time.time()-t0)*1000)
             transport.send_tool_result(fn, result)
             tm = {"role":"tool","tool_call_id":tc.id,"content":str(result)}
             messages.append(tm); CTX.add_message(tm)
@@ -779,7 +942,7 @@ def main():
         from http.server import HTTPServer, BaseHTTPRequestHandler
         import urllib.parse
 
-        PORT = 3201
+        PORT = 3202
         HOST = "0.0.0.0"
 
         class WebTransport(Transport):
@@ -789,6 +952,8 @@ def main():
                 self._queue = queue.Queue()
                 self._response = queue.Queue()
                 self._active = True
+            def reset(self):
+                self.__init__()
             def send(self, text: str):
                 self._queue.put(("text", text))
             def send_tool_start(self, name: str, args: dict):
@@ -820,36 +985,57 @@ def main():
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; height: 100vh; display: flex; flex-direction: column; }
-.header { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 12px 20px; display: flex; align-items: center; gap: 12px; }
+.header { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 12px 20px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .header h1 { font-size: 18px; font-weight: 600; }
 .header .badge { font-size: 11px; background: #e8f5e9; color: #2e7d32; padding: 2px 8px; border-radius: 10px; }
 .header .info { font-size: 12px; color: #888; margin-left: auto; }
-#chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
-.msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; line-height: 1.5; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+.main { flex: 1; display: flex; overflow: hidden; }
+#chat { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+#panel { width: 360px; background: #fff; border-left: 1px solid #e0e0e0; overflow-y: auto; padding: 16px; display: none; }
+#panel.open { display: block; }
+.panel-header { font-size: 14px; font-weight: 600; color: #555; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.panel-header .close { margin-left: auto; cursor: pointer; color: #999; font-size: 18px; line-height: 1; }
+.stat-card { background: #f8f9fa; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; }
+.stat-card .label { font-size: 11px; color: #888; }
+.stat-card .value { font-size: 18px; font-weight: 600; color: #1976d2; }
+.stat-row { display: flex; gap: 8px; }
+.stat-row .stat-card { flex: 1; }
+.trace-item { padding: 8px 0; border-bottom: 1px solid #eee; font-size: 13px; }
+.trace-item .name { font-weight: 500; }
+.trace-item .detail { color: #666; font-size: 12px; }
+.bar-chart { height: 6px; background: #e0e0e0; border-radius: 3px; margin-top: 4px; overflow: hidden; }
+.bar-chart .bar { height: 100%; background: #1976d2; border-radius: 3px; }
+.msg { max-width: 85%; padding: 8px 12px; border-radius: 10px; line-height: 1.5; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
 .msg.user { background: #e3f2fd; align-self: flex-end; border-bottom-right-radius: 4px; }
 .msg.agent { background: #fff; align-self: flex-start; border: 1px solid #e0e0e0; border-bottom-left-radius: 4px; }
-.msg.tool { background: #fff8e1; align-self: flex-start; font-size: 13px; font-family: 'SF Mono', Monaco, monospace; color: #666; border: 1px solid #ffe082; border-radius: 6px; padding: 8px 12px; }
+.msg.tool { background: #fff8e1; align-self: flex-start; font-size: 12px; font-family: 'SF Mono', Monaco, monospace; color: #666; border: 1px solid #ffe082; border-radius: 6px; padding: 6px 10px; }
 .msg.error { background: #ffebee; align-self: flex-start; color: #c62828; border: 1px solid #ef9a9a; }
-.msg .time { font-size: 11px; color: #aaa; margin-top: 4px; text-align: right; }
-.input-bar { background: #fff; border-top: 1px solid #e0e0e0; padding: 12px 20px; display: flex; gap: 10px; }
+.msg .time { font-size: 10px; color: #aaa; margin-top: 2px; text-align: right; }
+.input-bar { background: #fff; border-top: 1px solid #e0e0e0; padding: 12px 20px; display: flex; gap: 10px; flex-shrink: 0; }
 .input-bar input { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 10px 14px; font-size: 14px; outline: none; }
 .input-bar input:focus { border-color: #1976d2; }
 .input-bar button { background: #1976d2; color: #fff; border: none; border-radius: 8px; padding: 10px 20px; font-size: 14px; cursor: pointer; font-weight: 500; }
 .input-bar button:hover { background: #1565c0; }
 .input-bar button:disabled { background: #90caf9; cursor: not-allowed; }
-.loading { display: inline-block; width: 12px; height: 12px; border: 2px solid #ccc; border-top-color: #1976d2; border-radius: 50%; animation: spin .6s linear infinite; margin-left: 8px; }
+.loading { display: inline-block; width: 12px; height: 12px; border: 2px solid #ccc; border-top-color: #1976d2; border-radius: 50%; animation: spin .6s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-pre { margin: 4px 0; }
-code { background: #f5f5f5; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+.tracer-btn { font-size: 12px; color: #1976d2; cursor: pointer; margin-left: 8px; }
 </style>
 </head>
 <body>
 <div class="header">
   <h1>CAgent</h1>
   <span class="badge">v10</span>
+  <span class="tracer-btn" id="togBtn" onclick="togglePanel()">📊 Tracer</span>
   <span class="info" id="status">已连接</span>
 </div>
-<div id="chat"></div>
+<div class="main">
+  <div id="chat"></div>
+  <div id="panel">
+    <div class="panel-header">📊 Tracer 报告 <span class="close" onclick="togglePanel()">×</span></div>
+    <div id="panelContent"></div>
+  </div>
+</div>
 <div class="input-bar">
   <input id="input" type="text" placeholder="输入消息..." autofocus>
   <button id="send" onclick="send()">发送</button>
@@ -858,15 +1044,20 @@ code { background: #f5f5f5; padding: 1px 4px; border-radius: 3px; font-size: 13p
 const chat = document.getElementById('chat');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('send');
+const panel = document.getElementById('panel');
+const panelContent = document.getElementById('panelContent');
 let es = null;
 let loadingEl = null;
+
+function togglePanel() { panel.classList.toggle('open'); }
 
 function addMsg(type, text) {
   const div = document.createElement('div');
   div.className = 'msg ' + type;
-  div.textContent = text;
   if (type === 'tool') {
     div.innerHTML = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+  } else {
+    div.textContent = text;
   }
   const time = document.createElement('div');
   time.className = 'time';
@@ -880,13 +1071,45 @@ function showLoading() {
   if (loadingEl) return;
   loadingEl = document.createElement('div');
   loadingEl.className = 'msg agent';
-  loadingEl.innerHTML = '<span class="loading"></span> 思考中...';
+  loadingEl.innerHTML = '<span class="loading"></span>  思考中...';
   chat.appendChild(loadingEl);
   chat.scrollTop = chat.scrollHeight;
 }
 
 function hideLoading() {
   if (loadingEl) { loadingEl.remove(); loadingEl = null; }
+}
+
+function renderTrace(trace) {
+  if (!trace || !trace.spans) return;
+  const llm = trace.spans.filter(s => s.type === 'llm_call');
+  const tools = trace.spans.filter(s => s.type === 'tool_call');
+  const totalIn = llm.reduce((a,s) => a + (s.input_tokens||0), 0);
+  const totalOut = llm.reduce((a,s) => a + (s.output_tokens||0), 0);
+  const totalMs = trace.total_duration_ms || llm.reduce((a,s) => a + (s.duration_ms||0), 0);
+  const maxMs = Math.max(...llm.map(s => s.duration_ms||0), 1);
+  let html = '<div class="stat-row">';
+  html += '<div class="stat-card"><div class="label">LLM 调用</div><div class="value">'+ llm.length +'</div></div>';
+  html += '<div class="stat-card"><div class="label">工具</div><div class="value">'+ tools.length +'</div></div>';
+  html += '<div class="stat-card"><div class="label">耗时</div><div class="value">'+ totalMs +'ms</div></div>';
+  html += '</div>';
+  html += '<div class="stat-card"><div class="label">Token 消耗</div><div class="value">'+ totalIn +' → '+ totalOut +'</div></div>';
+  html += '<div style="margin-top:12px;font-weight:600;font-size:13px;">调用时序</div>';
+  llm.forEach((s,i) => {
+    const pct = Math.round((s.duration_ms/maxMs)*100);
+    html += '<div class="trace-item">';
+    html += '<div class="name">#'+(i+1)+' LLM <span class="detail">'+(s.cache_hit?'🔄':'')+ s.duration_ms +'ms · '+s.input_tokens+'→'+s.output_tokens+' tokens</span></div>';
+    html += '<div class="bar-chart"><div class="bar" style="width:'+pct+'%"></div></div>';
+    html += '</div>';
+  });
+  tools.forEach(s => {
+    html += '<div class="trace-item">';
+    html += '<div class="name">🔧 '+ s.name +' <span class="detail">'+ s.duration_ms +'ms</span></div>';
+    if (s.args) html += '<div class="detail">'+ JSON.stringify(s.args).slice(0,80) +'</div>';
+    html += '</div>';
+  });
+  panelContent.innerHTML = html;
+  panel.classList.add('open');
 }
 
 function send() {
@@ -896,23 +1119,17 @@ function send() {
   addMsg('user', text);
   showLoading();
   sendBtn.disabled = true;
+  panelContent.innerHTML = '';
 
   fetch('/api/chat', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({text})
   }).then(r => r.json()).then(data => {
-    if (data.ok) {
-      startSSE(data.session_id);
-    } else {
-      hideLoading();
-      addMsg('error', '请求失败: ' + (data.error || '未知错误'));
-      sendBtn.disabled = false;
-    }
+    if (data.ok) { startSSE(data.session_id); }
+    else { hideLoading(); addMsg('error', '请求失败: '+(data.error||'未知')); sendBtn.disabled = false; }
   }).catch(e => {
-    hideLoading();
-    addMsg('error', '网络错误: ' + e.message);
-    sendBtn.disabled = false;
+    hideLoading(); addMsg('error', '网络: '+e.message); sendBtn.disabled = false;
   });
 }
 
@@ -925,26 +1142,21 @@ function startSSE(sessionId) {
       hideLoading();
       if (data.type === 'text') {
         addMsg('agent', data.content);
-        sendBtn.disabled = false;
+      } else if (data.type === 'trace') {
+        try { renderTrace(JSON.parse(data.content)); } catch(x) {}
       } else if (data.type === 'tool_start') {
         addMsg('tool', '🔧 ' + data.content);
-      } else if (data.type === 'tool_result') {
-        // tool result already shown with start
       } else if (data.type === 'error') {
         addMsg('error', data.content);
         sendBtn.disabled = false;
       } else if (data.type === 'done') {
         sendBtn.disabled = false;
-        es.close();
-        es = null;
+        es.close(); es = null;
       }
     } catch(e) {}
   };
   es.onerror = function() {
-    hideLoading();
-    sendBtn.disabled = false;
-    es.close();
-    es = null;
+    hideLoading(); sendBtn.disabled = false; es.close(); es = null;
   };
 }
 
@@ -981,6 +1193,8 @@ input.addEventListener('keydown', function(e) {
                                 self.wfile.flush()
                             except BrokenPipeError:
                                 return
+                        if any(e[0] == "done" for e in events):
+                            break
                         import time
                         time.sleep(0.1)
                 else:
@@ -996,11 +1210,14 @@ input.addEventListener('keydown', function(e) {
                     import uuid
                     session_id = str(uuid.uuid4())[:8]
                     def _run():
+                        WT.reset()
                         try:
                             result = agent_loop(text, WT)
-                            WT.get_events()  # flush remaining
+                            WT.send(result)  # 把最终结果也推一次
+                            WT._queue.put(("done", ""))  # 标记完成
                         except Exception as e:
                             WT.send_error(str(e))
+                            WT._queue.put(("done", ""))
                     import threading
                     t = threading.Thread(target=_run, daemon=True)
                     t.start()

@@ -1,0 +1,72 @@
+{
+  "id": "20260629_185005",
+  "time": "2026-06-29T18:50:05.437999",
+  "model": "deepseek-chat",
+  "input": "计算3.14*2.5再查北京天气",
+  "result": "结果如下：\n\n1. **计算 3.14 × 2.5 = 7.85**\n2. **北京天气**：☀️ **晴**，温度 **22°C**\n\n两个任务都已完成！",
+  "trace": {
+    "spans": [
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782730200.8966815,
+        "end": 1782730203.7951553,
+        "duration_ms": 2898,
+        "input_tokens": 988,
+        "output_tokens": 118,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "calculator",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "a": 3.14,
+          "b": 2.5,
+          "op": "multiply"
+        },
+        "result": "7.8500000000000005",
+        "status": "ok"
+      },
+      {
+        "type": "tool_call",
+        "name": "get_weather",
+        "start": 0,
+        "end": 0,
+        "duration_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit": false,
+        "args": {
+          "city": "北京"
+        },
+        "result": "22°C,晴",
+        "status": "ok"
+      },
+      {
+        "type": "llm_call",
+        "name": "LLM",
+        "start": 1782730203.7964668,
+        "end": 1782730205.4375703,
+        "duration_ms": 1641,
+        "input_tokens": 1138,
+        "output_tokens": 47,
+        "cache_hit": false,
+        "args": null,
+        "result": "",
+        "status": "ok"
+      }
+    ],
+    "total_llm_calls": 2,
+    "total_tool_calls": 2,
+    "total_duration_ms": 4539
+  }
+}
